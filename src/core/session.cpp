@@ -2,6 +2,9 @@
 #include "strata/core/session.hpp"
 #include "strata/kernels/mrope.hpp"
 #include "strata/core/progress.hpp"
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
 
 #include "strata/kernels/qsa.hpp"
 #include "strata/kernels/elementwise.hpp"
@@ -583,6 +586,9 @@ bool session_loop(const ModelGeometry& g, int64_t pos, int32_t pos_base, Session
     const int64_t k = s.k;
     const size_t parts_bytes = (size_t) k * g.n_embd * 4;
     ++gr.calls_total;
+#ifdef STRATA_SHERLOCK_IT
+    STRATA_PROF_PHASE("session_loop");
+#endif
 
     // ================================ THE POSITION, WHICH THIS LOOP NEVER STAGED ================================
     //
@@ -789,6 +795,9 @@ bool session_token(const WeightTable& tables, const ModelGeometry& g, int64_t po
                    SessionState& s, const float* parts, void* stream, bool sync_every_layer,
                    std::string& err) {
     cudaStream_t cs = (cudaStream_t) stream;
+#ifdef STRATA_SHERLOCK_IT
+    STRATA_PROF_PHASE("session_token");
+#endif
     int64_t qsa_index = 0;
     int64_t gdn_index = 0;
 
@@ -913,6 +922,9 @@ bool session_run_token(const ModelGeometry& g, int64_t pos, int32_t pos_base, Se
     if (y_miss_host != tg.y_src) { err = "session_run_token: the staging buffer is not the captured one"; return false; }
     cudaStream_t cs = (cudaStream_t) stream;
     ++tg.calls;
+#ifdef STRATA_SHERLOCK_IT
+    STRATA_PROF_PHASE("session_run_token");
+#endif
     stage_token(g, pos, pos_base, s);
     doorbell_reset(*s.db);
     const cudaError_t le = cudaGraphLaunch(tg.exec, cs);

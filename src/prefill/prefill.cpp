@@ -20,6 +20,9 @@
 #include "strata/kernels/qsa.hpp"
 #include "strata/kernels/kv_stream.hpp"
 #include "strata/kernels/cvec.hpp"
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
 #include "strata/kernels/kv_q4.hpp"
 #include "strata/core/layer.hpp"
 #include "strata/core/native_head.hpp"
@@ -4072,6 +4075,9 @@ bool Prefill::drain_pipeline(std::string& err) {
 }
 
 bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& err) {
+#ifdef STRATA_SHERLOCK_IT
+    STRATA_PROF_PHASE("prefill_run");
+#endif
     const bool body_ok = run_impl(tokens, n, pos0, err);
 
     std::string drain_err;

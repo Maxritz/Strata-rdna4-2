@@ -1,6 +1,10 @@
 // src/core/device.cu - P2.S1: the CUDA side of the runtime core.
 #include "strata/core/device.hpp"
 
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
+
 #include <cuda_runtime.h>
 
 #include <cstdio>
@@ -322,6 +326,7 @@ DeviceArena::DeviceArena(uint64_t bytes, int ordinal, bool poison)
     // One allocation for the whole region.  cudaMalloc of a large block is the thing that can fail late, so it
     // happens once, here, before anything depends on it.
     check(cudaMalloc(&base_, (size_t) bytes), "cudaMalloc");
+    STRATA_PROF_ALLOC("DeviceArena", (size_t) bytes, base_);
     if (poison_) {
         const int threads = 256;
         const uint64_t n = bytes / sizeof(float);
@@ -339,6 +344,7 @@ DeviceArena::DeviceArena(uint64_t bytes, int ordinal, bool poison)
 }
 
 DeviceArena::~DeviceArena() {
+    STRATA_PROF_FREE("DeviceArena", base_);
     if (base_) cudaFree(base_);          // best effort: a destructor must not throw
 }
 
@@ -358,7 +364,9 @@ void* DeviceArena::alloc(uint64_t bytes, uint64_t align) {
         throw CudaError(msg, -1);
     }
     used_ = start + bytes;
-    return (char*) base_ + start;
+    void* ptr = (char*) base_ + start;
+    STRATA_PROF_ALLOC("DeviceArena::alloc", bytes, ptr);
+    return ptr;
 }
 
 }  // namespace strata::core
