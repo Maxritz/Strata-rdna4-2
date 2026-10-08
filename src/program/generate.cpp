@@ -68,6 +68,9 @@
 #include "strata/core/progress.hpp"
 #include "strata/core/device.hpp"
 #include "strata/core/emulate.hpp"
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
 #ifndef NOMINMAX
 #define NOMINMAX   // gguf_reader.hpp includes windows.h
 #endif
@@ -403,6 +406,7 @@ struct Options {
     /// Per-stage CUDA-event timings inside the layer halves.  `--no-capture` only: an event recorded inside a
     /// stream capture is silently dropped, so the captured path cannot carry this.
     bool stage_timing = false;
+    bool profile = false;   // --profile: sherlock-it profiling instrumentation
     /// Launch the 48 captured `pre` graphs back to back with no host work between them and report the pure GPU
     /// time per token.  This is the only measurement that separates host-bound from GPU-bound, because the
     /// stage events include every gap where the GPU waited for the host.
@@ -785,10 +789,13 @@ void usage() {
                  "  --sync-every-layer   debug: synchronise after every layer\n"
                  "  --ple-gguf PATH      the n-gram/PLE shard.  WITHOUT IT LAYER 1's PLE IS SILENTLY SKIPPED,\n"
                  "                       which changes every number downstream - pass it for any real run\n"
-                 "  --dump-mixed PATH    write the post-attention residual (n_embd, f32)\n"
-                 "  --stage-timing       per-stage KERNEL-COUNT shares.  NOT a time profile: an uncaptured\n"
-                 "                       event interval includes host gaps, so run with --gpu-only-full first\n"
-                 "  --graph-only         MEASURE: replay the 48 `pre` graphs only.  OMITS the 48 `post` graphs\n"
+                  "  --dump-mixed PATH    write the post-attention residual (n_embd, f32)\n"
+                  "  --stage-timing       per-stage KERNEL-COUNT shares.  NOT a time profile: an uncaptured\n"
+                  "                       event interval includes host gaps, so run with --gpu-only-full first\n"
+                  "  --profile            enable sherlock-it profiling instrumentation (kernel timing,\n"
+                  "                       memory usage, BLAS calls, phase markers).  Outputs CSV to\n"
+                  "                       STRATA_SHERLOCK_OUTDIR/sherlock-<pid>.csv (default: cwd).\n"
+                  "  --graph-only         MEASURE: replay the 48 `pre` graphs only.  OMITS the 48 `post` graphs\n"
                  "                       and the LM head, so it is NOT the GPU floor (R0.3, Memory/ERRORS.md A4)\n"
                  "  --gpu-only-full      MEASURE: replay pre+post for all 48 layers plus the LM head, no pool.\n"
                  "                       THE TRUE PER-TOKEN GPU FLOOR.  Quote this one, not --graph-only.\n"
@@ -1712,6 +1719,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-pool") o.no_pool = true;
         else if (a == "--sync-every-layer") o.sync_every_layer = true;
         else if (a == "--stage-timing") o.stage_timing = true;
+        else if (a == "--profile") o.profile = true;
         else if (a == "--graph-only") o.graph_only = true;
         else if (a == "--gpu-only-full") o.gpu_only_full = true;
         else if (a == "--pool-workers") o.pool_workers = std::atoi(next("--pool-workers"));
@@ -1955,6 +1963,16 @@ int main(int argc, char** argv) {
         cudaDeviceProp ad{};
         if (cudaGetDeviceProperties(&ad, 0) == cudaSuccess) strata::core::apply_arch_defaults(ad.gcnArchName);
         else (void) cudaGetLastError();
+    }
+#endif
+#ifdef STRATA_SHERLOCK_IT
+    if (o.profile) {
+#ifdef _WIN32
+        _putenv_s("STRATA_SHERLOCK_IT", "1");
+#else
+        setenv("STRATA_SHERLOCK_IT", "1", 0);
+#endif
+        strata::profiling::Profiler::instance().initialize();
     }
 #endif
     strata::core::set_coupled_draft(o.coupled_draft);
@@ -11202,6 +11220,9 @@ int main(int argc, char** argv) {
             if (!kvg_ensure(n_prompt + o.max_new + 64, [] { cudaDeviceSynchronize(); })) return 1;
         }
         const Clock::time_point tp0 = Clock::now();
+#ifdef STRATA_SHERLOCK_IT
+        STRATA_PROF_PHASE("prefill_run");
+#endif
         if (!prefill.run(o.tokens.data(), n_batched, 0, err)) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
             return 1;
@@ -11253,6 +11274,7 @@ int main(int argc, char** argv) {
         if (!kvg_ensure(n_prompt + o.max_new + 64, [] { cudaDeviceSynchronize(); })) return 1;
     }
     for (int64_t pos = pos_start;; ++pos) {
+        STRATA_PROF_PHASE(pos < n_prompt ? "decode_prompt" : "decode");
         // plan v0.3 P6: a native pack's last prompt token is the first verify window (T = 1)
         if (native_pack) { spec_pos = pos; break; }
         if (pos >= o.max_context) {

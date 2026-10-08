@@ -1,6 +1,9 @@
 // src/core/pinned.cu - P2.S1: the pinned host arena and the parallel expert load.
 #include "strata/core/pinned.hpp"
 #include "strata/platform/memory.hpp"
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
 
 #include <cuda_runtime.h>
 
@@ -360,6 +363,12 @@ PinnedArena::PinnedArena(uint64_t bytes, const std::vector<uint64_t>& bounds,
         mapping_base = base;
         mapping_bytes = bytes;
     }
+
+#ifdef STRATA_SHERLOCK_IT
+    if (base) {
+        ::strata::profiling::Profiler::instance().mem_alloc("PinnedArena", (size_t) bytes, base);
+    }
+#endif
 
     // Register with CUDA BEFORE any page is touched: cudaHostRegister pins what is resident now, and a region
     // that has already been faulted in page by page is far more expensive to register and may fail outright.

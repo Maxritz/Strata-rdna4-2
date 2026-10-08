@@ -98,6 +98,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt AND EXISTS ${CMAKE_CU
 endif()
 option(STRATA_BUILD_TESTS "Build the test suite" ${_strata_tests_default})
 option(STRATA_BUILD_CONVERSATION_TESTS "Build standalone conversation cache tests" OFF)
+option(STRATA_SHERLOCK_IT "Enable sherlock-it profiling instrumentation" ON)
 option(STRATA_WERROR "Treat compiler warnings as errors" OFF)
 
 if(STRATA_BUILD_CONVERSATION_TESTS)
@@ -267,6 +268,10 @@ target_link_libraries(strata-plan PRIVATE strata_plan)
 if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   add_library(strata_core STATIC src/core/device.cu src/core/pinned.cu src/platform/memory.cpp src/core/graph.cpp src/core/weights.cpp
                                src/core/layout.cpp)
+  if(STRATA_SHERLOCK_IT)
+    target_sources(strata_core PRIVATE src/platform/profiling.cpp)
+    target_compile_definitions(strata_core PUBLIC STRATA_SHERLOCK_IT=1)
+  endif()
   target_include_directories(strata_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   if(STRATA_ENABLE_CUDA AND STRATA_EXPERIMENTAL_SM60)
     # the runtime device check (src/core/device.cu) admits the cards this build was made for (#236)

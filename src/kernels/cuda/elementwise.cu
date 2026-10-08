@@ -1,6 +1,9 @@
 // src/kernels/cuda/elementwise.cu - P2.S5's glue kernels.  See the header for why each exists.
 #include "strata/kernels/elementwise.hpp"
 #include "strata/kernels/dp4a.hpp"
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#endif
 
 #include "strata/kernels/bf16_bits.hpp"
 #include "strata/kernels/f16_bits.hpp"
@@ -134,8 +137,14 @@ void embedding_gather(const uint8_t* codes, const float* scales, const float* of
                       int64_t n, int code_bits, int code_bias, int group_elems,
                       float* out, void* stream) {
     if (n <= 0) return;
-    embedding_gather_kernel<<<grid_for(n), THREADS, 0, (cudaStream_t) stream>>>(
-        codes, scales, offsets, n, code_bits, code_bias, group_elems, out);
+    {
+        auto _prof_id = ::strata::profiling::Profiler::instance().kernel_launch(
+            "embedding_gather", stream, (int32_t)grid_for(n), 1, 1,
+            (int32_t)THREADS, 1, 1, 0);
+        embedding_gather_kernel<<<grid_for(n), THREADS, 0, (cudaStream_t) stream>>>(
+            codes, scales, offsets, n, code_bits, code_bias, group_elems, out);
+        ::strata::profiling::Profiler::instance().kernel_done(_prof_id);
+    }
     check_launch("embedding_gather");
 }
 

@@ -9,6 +9,11 @@
 #include "wmma_gemm.h"
 #endif
 
+#ifdef STRATA_SHERLOCK_IT
+#include "strata/platform/profiling.hpp"
+#include <chrono>
+#endif
+
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -326,6 +331,8 @@ bool try_hipblaslt(void* opaque_state, strata::prefill::hipblaslt::InputType typ
                                                    state->workspace_bytes, (hipStream_t) stream);
     if (status == HIPBLAS_STATUS_SUCCESS) {
         ++state->lt_launches;
+        STRATA_PROF_BLAS("hipblasLtMatmul", (int) n, (int) t, (int) k,
+            type == strata::prefill::hipblaslt::InputType::bf16 ? "bf16" : "fp16", 0.0);
         return true;
     }
 
@@ -635,16 +642,22 @@ void Gemm::bf16(const uint16_t* X, const uint16_t* W, float* Y, int64_t T, int64
                                wf, (int) K, xf, (int) K, &beta, Y + t0 * ldy, (int) ldy),
                    "cublasSgemm (bf16 on Pascal)");
             }
+            STRATA_PROF_BLAS("cublasSgemm", (int) N, (int) T, (int) K, "bf16", 0.0);
             return;
         }
     }
 #endif
 #endif
     // Column-major view: Y^T[N, T] = W[N, K] (stored K x N col-major, transposed) . X^T[K, T].
-    ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &alpha, W,
-                    CUDA_R_16BF, (int) K, X, CUDA_R_16BF, (int) (ldx ? ldx : K), &beta, Y, CUDA_R_32F, (int) ldy,
-                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
-       "cublasGemmEx");
+    {
+        auto _prof_t0 = std::chrono::steady_clock::now();
+        ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &alpha, W,
+                        CUDA_R_16BF, (int) K, X, CUDA_R_16BF, (int) (ldx ? ldx : K), &beta, Y, CUDA_R_32F, (int) ldy,
+                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+           "cublasGemmEx");
+        auto _prof_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _prof_t0).count();
+        STRATA_PROF_BLAS("cublasGemmEx", (int) N, (int) T, (int) K, "bf16", _prof_ms);
+    }
     STRATA_ABSORB_HIPBLAS_STICKY("cublasGemmEx");
 }
 
@@ -674,10 +687,15 @@ void Gemm::f16(const uint16_t* X, const uint16_t* W, float* Y, int64_t T, int64_
         return;
     }
 #endif
-    ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &alpha, W,
-                    CUDA_R_16F, (int) K, X, CUDA_R_16F, (int) K, &beta, Y, CUDA_R_32F, (int) ldy,
-                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
-       "cublasGemmEx f16");
+    {
+        auto _prof_t0 = std::chrono::steady_clock::now();
+        ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &alpha, W,
+                        CUDA_R_16F, (int) K, X, CUDA_R_16F, (int) K, &beta, Y, CUDA_R_32F, (int) ldy,
+                        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+           "cublasGemmEx f16");
+        auto _prof_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _prof_t0).count();
+        STRATA_PROF_BLAS("cublasGemmEx", (int) N, (int) T, (int) K, "fp16", _prof_ms);
+    }
     STRATA_ABSORB_HIPBLAS_STICKY("cublasGemmEx f16");
 }
 
@@ -750,10 +768,15 @@ bool Gemm::native_mmq(const uint16_t* X, int type, const void* W, float* Y, int6
 void Gemm::f16_inplace(const uint16_t* X, const uint16_t* W, float* Y, int64_t T, int64_t N, int64_t K, int64_t ldy) {
 #if defined(__HIPCC__)
     const float one = 1.0f, zero = 0.0f;
-    ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &one, W, CUDA_R_16F,
-                    (int) K, X, CUDA_R_16F, (int) K, &zero, Y, CUDA_R_16F, (int) (2 * ldy), CUBLAS_COMPUTE_32F,
-                    CUBLAS_GEMM_DEFAULT),
-       "cublasGemmEx f16 out");
+    {
+        auto _prof_t0 = std::chrono::steady_clock::now();
+        ck(cublasGemmEx((cublasHandle_t) handle_, CUBLAS_OP_T, CUBLAS_OP_N, (int) N, (int) T, (int) K, &one, W, CUDA_R_16F,
+                        (int) K, X, CUDA_R_16F, (int) K, &zero, Y, CUDA_R_16F, (int) (2 * ldy), CUBLAS_COMPUTE_32F,
+                        CUBLAS_GEMM_DEFAULT),
+           "cublasGemmEx f16 out");
+        auto _prof_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _prof_t0).count();
+        STRATA_PROF_BLAS("cublasGemmEx", (int) N, (int) T, (int) K, "fp16_out", _prof_ms);
+    }
     static const bool dbg_nan = std::getenv("STRATA_DBG_NAN") != nullptr;
     widen_rows_f16<<<(unsigned) T, 256, 0, (cudaStream_t) stream_>>>(Y, N, ldy, dbg_nan ? 1 : 0);
     if (dbg_nan) {   // debug only: a sync per GEMM
